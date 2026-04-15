@@ -1,52 +1,52 @@
--- ============================================================
--- USER BEHAVIORAL PROFILE
--- Programa de Pontos — Plataforma Twitch / Cursos
--- ============================================================
--- Objetivo: Construir uma tabela analítica com o perfil
--- comportamental completo de cada usuário.
---
--- Métricas geradas:
---   • Quantidade de transações         (Vida, D7, D14, D28, D56)
---   • Dias desde a última transação    (recência)
---   • Idade na base                    (dias desde o cadastro)
---   • Produto mais usado               (Vida, D7, D14, D28, D56)
---   • Categoria do produto mais usado  (Vida, D7, D14, D28, D56)
---   • Saldo de pontos atual
---   • Pontos acumulados positivos      (Vida, D7, D14, D28, D56)
---   • Pontos acumulados negativos      (Vida, D7, D14, D28, D56)
---   • Dia da semana mais ativo         (D28)
---   • Período do dia mais ativo        (D28)
---   • Engajamento D28 vs. Vida
---   • Plataformas conectadas           (Twitch, YouTube, Email, etc.)
---
--- Compatibilidade: SQLite
---
--- ⚠️  Nota importante sobre cobertura:
---     A base possui 4.962 clientes registados, dos quais 1.469
---     (~30%) nunca realizaram transações. Como o output parte de
---     tb_sumário_transações (que agrega apenas clientes com ao
---     menos 1 transação), estes clientes inativos são EXCLUÍDOS
---     do resultado final. Para incluí-los, o ponto de partida
---     deve ser a tabela `clientes` com LEFT JOINs.
--- ============================================================
+============================================================
+Rewards Programme — Twitch Platform / Courses
+============================================================
+Objective: To build an analytical table containing the
+complete behavioural profile of each user.
 
+**Important**
+    This is merely a document for reference; to run the programme, you must use the ‘etl.projeto.sql’ file located in this repository
+    
+    
+ Metrics generated:
+    • Number of transactions         (Lifetime, D7, D14, D28, D56)
+    • Days since last transaction    (recency)
+    • Age in the database                    (days since registration)
+    • Most used product               (Lifetime, D7, D14, D28, D56)
+    • Category of most used product  (Lifetime, D7, D14, D28, D56)
+    • Current points balance
+    • Positive accumulated points      (Lifetime, D7, D14, D28, D56)
+    • Negative accumulated points      (Lifetime, D7, D14, D28, D56)
+    • Most active day of the week         (D28)
+    • Most active time of day        (D28)
+    • D28 engagement vs. Lifetime
+    • Connected platforms           (Twitch, YouTube, Email, etc.)
 
-WITH
+Compatibility: SQLite
+    
+⚠️ Important note regarding coverage:
 
--- ------------------------------------------------------------
--- 1. tb_transações
--- Limpeza e enriquecimento da tabela de transações brutas.
---
--- • substr(DtCriacao, 1, 19) → remove milissegundos e fusos,
---   garantindo formato 'YYYY-MM-DD HH:MM:SS' compatível com
---   as funções datetime() e strftime() do SQLite.
--- • Diff_Date: dias corridos desde a transação (float).
---   Valores próximos de 0 = transações recentes.
--- • Dt_Hora: hora extraída como integer para classificação
---   de período do dia na CTE tb_cliente_periodo.
--- ------------------------------------------------------------
-tb_transações AS (
+    The database has 4,962 registered customers, of whom 1,469 (~30%) have never carried out any transactions. 
+    
+    As the output is taken from `db_transaction_summary` (which only aggregates customers with at least one transaction), 
+    these inactive customers are EXCLUDED from the final result. To include them, the starting point should 
+    be the `clientes` table with LEFT JOINs.
+    
+---
 
+1. tb_transações
+    Cleaning and enrichment of the raw transaction table.
+    
+        • substr(DtCriacao, 1, 19) → removes milliseconds and time zones, 
+    ensuring the format “YYYY-MM-DD HH:MM:SS” is compatible with the 
+    SQLite datetime() and strftime() functions.
+    
+        • Diff_Date: number of calendar days since the transaction (float). Values close to 0 = recent transactions.
+    
+        • Dt_Hora: time extracted as an integer for classifying the time of day in the CTE tb_cliente_periodo.
+
+--------------------------------------------------------------
+WITH tb_transações AS (
     SELECT
         IdTransacao,
         IdCliente,
@@ -58,73 +58,69 @@ tb_transações AS (
     FROM transacoes
 ),
 
+---
+    
+2. tb_cliente
+    
+    Extracts registration data and platform flags for each customer.
+    
+        • Age_Base: number of calendar days since registration. Allows you to segment new customers from established ones.
+    
+        • Platform flags (1 = connected, 0 = not connected): flTwitch (primary, ~69% of customers), 
+    flEmail (~4%), flYouTube (~3%), flBlueSky and flInstagram (not yet in use).
 
--- ------------------------------------------------------------
--- 2. tb_cliente
--- Extrai dados de cadastro e flags de plataforma de cada cliente.
---
--- • Idade_Base: dias corridos desde o cadastro. Permite
---   segmentar clientes novos vs. maduros.
--- • Flags de plataforma (1 = conectado, 0 = não conectado):
---   flTwitch (principal, ~69% dos clientes), flEmail (~4%),
---   flYouTube (~3%), flBlueSky e flInstagram (ainda não usados).
--- ------------------------------------------------------------
-tb_cliente AS (
-
-    SELECT
-        idCliente,
-        julianday('now') - julianday(substr(DtCriacao, 1, 10))      AS Idade_Base,
-        flTwitch,
-        flYouTube,
-        flEmail,
-        flBlueSky,
-        flInstagram
-
-    FROM clientes
+--------------------------------------------------------------  
+tb_cliente as (
+    SELECT idCliente,
+           datetime(substr(DtCriacao,1,19)) as Dt_Criação,
+           julianday("now") - julianday(substr(DtCriacao,1,10)) as Idade_Base
+    
+    From clientes
 ),
 
-
--- ------------------------------------------------------------
--- 3. tb_sumário_transações
--- Agregação central por cliente — todas as métricas de volume,
--- recência e pontos segmentadas por janela temporal.
---
--- • Janelas: Vida (histórico completo), D56, D28, D14, D7.
--- • Dias_Ultima_Interação: MIN(Diff_Date) = transação mais
---   recente. Quanto menor, mais recente o cliente.
--- • Saldo_Pontos: soma de todos os movimentos (positivo =
---   crédito, negativo = resgate). Validado contra
---   clientes.qtdePontos — os valores batem exatamente.
--- • Pontos negativos são mantidos como valores negativos,
---   facilitando a distinção crédito/débito na análise.
---   Na base atual, resgates representam < 1% das transações.
--- ------------------------------------------------------------
+---
+    
+3. tb_sumário_transações
+    
+    Central aggregation by customer — all volume, recency and points metrics segmented by time window.
+    
+        • Windows: Lifetime (full history), D56, D28, D14, D7.
+    
+        • Days_Since_Last_Interaction: MIN(Diff_Date) = most recent transaction. The lower the value, the more recent the customer.
+    
+        • Points_Balance: sum of all transactions (positive = credit, negative = redemption). 
+    Validated against customers.points_count — the values match exactly.
+    
+        • Negative points are retained as negative values, facilitating the credit/debit distinction in the analysis. 
+    In the current database, redemptions account for < 1% of transactions.
+    
+--------------------------------------------------------------
 tb_sumário_transações AS (
 
     SELECT
         IdCliente,
 
-        -- Volume de transações por janela temporal
-        COUNT(IdTransacao)                                                               AS Qt_Transações_Vida,
+          **Transaction volume by time period**
+        COUNT(IdTransacao)                                                              AS Qt_Transações_Vida,
         COUNT(CASE WHEN Diff_Date <= 56 THEN IdTransacao END)                           AS Qt_Transações_D56,
         COUNT(CASE WHEN Diff_Date <= 28 THEN IdTransacao END)                           AS Qt_Transações_D28,
         COUNT(CASE WHEN Diff_Date <= 14 THEN IdTransacao END)                           AS Qt_Transações_D14,
         COUNT(CASE WHEN Diff_Date <=  7 THEN IdTransacao END)                           AS Qt_Transações_D7,
 
-        -- Recência: distância em dias da última interação
+          **Recency: the number of days since the last interaction**
         MIN(Diff_Date)                                                                   AS Dias_Ultima_Interação,
 
-        -- Saldo atual = créditos acumulados − resgates
+          **Current balance = accumulated credits − redemptions**
         SUM(QtdePontos)                                                                  AS Saldo_Pontos,
 
-        -- Créditos (pontos recebidos) por janela
+         **Credits (points earned) per window**
         SUM(CASE WHEN QtdePontos >  0                     THEN QtdePontos ELSE 0 END)   AS Pontos_Positivos_Vida,
         SUM(CASE WHEN QtdePontos >  0 AND Diff_Date <= 56 THEN QtdePontos ELSE 0 END)   AS Pontos_Positivos_D56,
         SUM(CASE WHEN QtdePontos >  0 AND Diff_Date <= 28 THEN QtdePontos ELSE 0 END)   AS Pontos_Positivos_D28,
         SUM(CASE WHEN QtdePontos >  0 AND Diff_Date <= 14 THEN QtdePontos ELSE 0 END)   AS Pontos_Positivos_D14,
         SUM(CASE WHEN QtdePontos >  0 AND Diff_Date <=  7 THEN QtdePontos ELSE 0 END)   AS Pontos_Positivos_D7,
 
-        -- Débitos (resgates de pontos) por janela — valores negativos
+          **Debits (point redemptions) per window — negative values**
         SUM(CASE WHEN QtdePontos <  0                     THEN QtdePontos ELSE 0 END)   AS Pontos_Negativos_Vida,
         SUM(CASE WHEN QtdePontos <  0 AND Diff_Date <= 56 THEN QtdePontos ELSE 0 END)   AS Pontos_Negativos_D56,
         SUM(CASE WHEN QtdePontos <  0 AND Diff_Date <= 28 THEN QtdePontos ELSE 0 END)   AS Pontos_Negativos_D28,
@@ -135,23 +131,26 @@ tb_sumário_transações AS (
     GROUP BY IdCliente
 ),
 
+---
 
--- ------------------------------------------------------------
--- 4. tb_transação_produto
--- Enriquece cada transação com nome e categoria do produto.
---
--- Estrutura do join:
---   transacoes ──(1:N)── transacao_produto ──(N:1)── produtos
---
--- Cobertura do join: 99,86% das linhas têm produto identificado.
--- Os ~0,14% sem match correspondem a IdProduto vazio ('').
---
--- Os produtos dividem-se em dois grupos:
---   1. Ações de engajamento: 'ChatMessage', 'Lista de presença',
---      'Presença Streak' — representam > 97% do volume.
---   2. Itens RPG (espadas, armaduras, etc.) — transações de
---      resgate, onde o cliente gasta pontos acumulados.
--- ------------------------------------------------------------
+4. tb_transação_produto
+    
+    Enrich each transaction with the product name and category.
+
+    Join structure:
+        transactions ──(1:N)── transaction_product ──(N:1)── products
+
+    Join coverage: 99.86% of rows have an identified product.
+
+    The ~0.14% without a match correspond to an empty ProductID (“”).
+
+    The products are divided into two groups:
+
+        1. Engagement actions: “ChatMessage”, “Attendance List”, “Attendance Streak” — account for > 97% of the volume.
+    
+        2. RPG items (swords, armour, etc.) — redemption transactions, where the customer spends accumulated points.
+
+--------------------------------------------------------------
 tb_transação_produto AS (
 
     SELECT
@@ -167,14 +166,15 @@ tb_transação_produto AS (
     LEFT JOIN produtos AS t3
         ON t2.IdProduto = t3.IdProduto
 ),
+    
+---
+    
+5. tb_cliente_produto
 
-
--- ------------------------------------------------------------
--- 5. tb_cliente_produto
--- Conta quantas vezes cada cliente interagiu com cada produto,
--- por janela temporal.
--- Inclui DescCategoriaProduto para enriquecer o perfil final
--- além do nome do produto mais usado.
+    Counts how many times each customer has interacted with each product, by time period.
+    
+    Includes ProductCategory to enrich the final profile beyond just the name of the most frequently used product.
+    
 -- ------------------------------------------------------------
 tb_cliente_produto AS (
 
@@ -192,15 +192,17 @@ tb_cliente_produto AS (
     GROUP BY IdCliente, DescNomeProduto, DescCategoriaProduto
 ),
 
+---
+    
+6. tb_cliente_produto_rn
+    
+    Rank products by frequency of use in each window.
+    
+    RN = 1 identifies the most frequently used product.
 
--- ------------------------------------------------------------
--- 6. tb_cliente_produto_rn
--- Ranqueia produtos por frequência de uso em cada janela.
--- RN = 1 identifica o produto mais utilizado.
---
--- ⚠️  Em caso de empate, ROW_NUMBER() desempata por
---     DescNomeProduto ASC para garantir determinismo.
--- ------------------------------------------------------------
+    ⚠️  In the event of a tie, ROW_NUMBER() breaks the tie by sorting on ProductName ASC to ensure determinism.
+    
+--------------------------------------------------------------
 tb_cliente_produto_rn AS (
 
     SELECT
@@ -214,15 +216,17 @@ tb_cliente_produto_rn AS (
     FROM tb_cliente_produto
 ),
 
-
--- ------------------------------------------------------------
--- 7. tb_cliente_dia
--- Conta transações por dia da semana nos últimos 28 dias.
---
--- strftime('%w', ...) retorna TEXT:
---   '0'=Domingo | '1'=Segunda | '2'=Terça | '3'=Quarta
---   '4'=Quinta  | '5'=Sexta   | '6'=Sábado
--- ------------------------------------------------------------
+---
+    
+7. tb_cliente_dia
+    
+    Counts transactions by day of the week over the last 28 days.
+    
+    strftime(“%w”, ...) returns TEXT:
+    
+        “0”=Sunday | “1”=Monday | “2”=Tuesday | “3”=Wednesday | “4”=Thursday | “5”=Friday | “6”=Saturday
+    
+--------------------------------------------------------------
 tb_cliente_dia AS (
 
     SELECT
@@ -235,13 +239,16 @@ tb_cliente_dia AS (
     GROUP BY IdCliente, Dia_Semana
 ),
 
-
--- ------------------------------------------------------------
--- 8. tb_cliente_dia_rn
--- Ranqueia os dias da semana por volume de transações.
--- RN = 1 → dia mais ativo nos últimos 28 dias.
--- Desempate por Dia_Semana ASC para determinismo.
--- ------------------------------------------------------------
+---
+    
+8. tb_cliente_dia_rn
+    
+    Rank the days of the week by transaction volume.
+    
+    RN = 1 → the busiest day in the last 28 days.
+    
+    Tie-break by Day_of_Week ASC for determinism.
+--------------------------------------------------------------
 tb_cliente_dia_rn AS (
 
     SELECT
@@ -251,18 +258,20 @@ tb_cliente_dia_rn AS (
     FROM tb_cliente_dia
 ),
 
+---
 
--- ------------------------------------------------------------
--- 9. tb_cliente_periodo
--- Classifica transações dos últimos 28 dias por período do dia
--- e conta o total por cliente e período.
---
--- Faixas horárias definidas:
---   Manhã:     07h – 12h
---   Tarde:     13h – 18h
---   Noite:     19h – 23h
---   Madrugada: 00h – 06h
--- ------------------------------------------------------------
+9. tb_cliente_periodo
+    
+    Sorts transactions from the last 28 days by time of day and calculates the total per customer and time period.
+    
+    Defined time slots:
+    
+        Morning:     07:00 – 12:00
+        Afternoon:     13:00 – 18:00
+        Evening:     19:00 – 23:00
+        Early morning: 00:00 – 06:00
+    
+--------------------------------------------------------------
 tb_cliente_periodo AS (
 
     SELECT
@@ -280,12 +289,15 @@ tb_cliente_periodo AS (
     GROUP BY IdCliente, Periodo
 ),
 
-
--- ------------------------------------------------------------
--- 10. tb_cliente_periodo_rn
--- Ranqueia períodos por volume de transações.
--- RN = 1 → período mais ativo nos últimos 28 dias.
--- ------------------------------------------------------------
+---
+    
+10. tb_cliente_periodo_rn
+    
+    Ranks periods by transaction volume.
+    
+    RN = 1 → the most active period in the last 28 days.
+    
+--------------------------------------------------------------
 tb_cliente_periodo_rn AS (
 
     SELECT
@@ -295,30 +307,26 @@ tb_cliente_periodo_rn AS (
     FROM tb_cliente_periodo
 ),
 
-
--- ------------------------------------------------------------
--- 11. tb_join
--- Consolida todas as CTEs em uma única linha por cliente.
---
--- COALESCE garante que clientes sem atividade nos últimos 28
--- dias não gerem NULLs no output:
---   • Dia_Semana_D28: 'N/A' (texto, consistente com strftime)
---   • Periodo_D28:    'Sem Informação'
--- ------------------------------------------------------------
+---
+    
+11. tb_join
+    
+    Consolidates all CTEs into a single row per customer.
+    
+    COALESCE ensures that customers with no activity in the last 28 days do not generate NULLs in the output:
+    
+        • Day_of_Week_D28: “N/A” (text, consistent with strftime)
+        • Period_D28:    'No Information'
+    
+--------------------------------------------------------------
 tb_join AS (
 
     SELECT
         t1.*,
-
-        -- Dados cadastrais e plataformas conectadas
         t2.Idade_Base,
-        t2.flTwitch,
-        t2.flYouTube,
-        t2.flEmail,
-        t2.flBlueSky,
-        t2.flInstagram,
 
-        -- Produto + categoria mais usados por janela temporal
+            **Most popular products and categories by time period**
+    
         t3.DescNomeProduto      AS Produto_Vida,
         t3.DescCategoriaProduto AS Categoria_Produto_Vida,
 
@@ -334,11 +342,12 @@ tb_join AS (
         t7.DescNomeProduto      AS Produto_D7,
         t7.DescCategoriaProduto AS Categoria_Produto_D7,
 
-        -- Dia da semana mais ativo em D28
-        -- '0'=Dom '1'=Seg '2'=Ter '3'=Qua '4'=Qui '5'=Sex '6'=Sáb
+            **The busiest day of the week in D28**
+    
         COALESCE(t8.Dia_Semana, 'N/A')          AS Dia_Semana_Mais_Ativo_D28,
 
-        -- Período do dia mais ativo em D28
+            **The busiest time of day at D28**
+    
         COALESCE(t9.Periodo, 'Sem Informação')  AS Periodo_Mais_Ativo_D28
 
     FROM tb_sumário_transações AS t1
@@ -346,45 +355,54 @@ tb_join AS (
     LEFT JOIN tb_cliente AS t2
         ON t1.IdCliente = t2.idCliente
 
-    -- Produto mais usado — Vida
+        **Most popular product — Life**
+    
     LEFT JOIN tb_cliente_produto_rn AS t3
         ON t1.IdCliente = t3.IdCliente AND t3.RN_Vida = 1
 
-    -- Produto mais usado — D56
+        **Most popular product — D56**
+    
     LEFT JOIN tb_cliente_produto_rn AS t4
         ON t1.IdCliente = t4.IdCliente AND t4.RN_D56  = 1
 
-    -- Produto mais usado — D28
+        **Most popular product — D28**
+    
     LEFT JOIN tb_cliente_produto_rn AS t5
         ON t1.IdCliente = t5.IdCliente AND t5.RN_D28  = 1
 
-    -- Produto mais usado — D14
+        **Most popular product — D14**
+    
     LEFT JOIN tb_cliente_produto_rn AS t6
         ON t1.IdCliente = t6.IdCliente AND t6.RN_D14  = 1
 
-    -- Produto mais usado — D7
+        **Most popular product — D7**
+    
     LEFT JOIN tb_cliente_produto_rn AS t7
         ON t1.IdCliente = t7.IdCliente AND t7.RN_D7   = 1
 
-    -- Dia mais ativo em D28
+        **The busiest day at D28**
+    
     LEFT JOIN tb_cliente_dia_rn AS t8
         ON t1.IdCliente = t8.IdCliente AND t8.RN_Dia  = 1
 
-    -- Período mais ativo em D28
+        **Most active period on D28**
+    
     LEFT JOIN tb_cliente_periodo_rn AS t9
         ON t1.IdCliente = t9.IdCliente AND t9.RN_Periodo = 1
 )
 
-
--- ============================================================
--- OUTPUT FINAL
--- Uma linha por cliente com todas as métricas.
---
--- Engajamento_D28_Vida:
---   Proporção das transações D28 sobre o histórico total.
---   Range: 0.0 (inativo em D28) → 1.0 (toda atividade em D28).
---   NULLIF evita divisão por zero para clientes sem histórico.
--- ============================================================
+---
+    
+FINAL OUTPUT
+    
+    One row per customer containing all metrics.
+    
+    D28_Engagement_Lifetime:
+    
+        Proportion of D28 transactions relative to the total history.
+        Range: 0.0 (inactive in D28) → 1.0 (all activity in D28).
+        NULLIF prevents division by zero for customers with no history.
+--------------------------------------------------------------
 SELECT
     *,
     1.0 * Qt_Transações_D28 / NULLIF(Qt_Transações_Vida, 0)  AS Engajamento_D28_Vida
