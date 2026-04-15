@@ -197,7 +197,7 @@ tb_join as (
 
 
 SELECT *,
-       1. *Qt_de_Transações28 / Qt_de_Transações_Vida as Enganjamento_28_Vida
+       1. *Qt_de_Transações28 / Qt_de_Transações_Vida as Engajamento_28_Vida
 
 
 From tb_join
